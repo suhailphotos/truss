@@ -6,11 +6,12 @@ usage() {
 Usage:
   bootstrap_repo_generic.sh -u <gh_user> -r <repo> [-d <desc>] [-p <dest_path>]
                             [-R <readme_path>] [-V <public|private>] [-O <op_secret_path>]
-                            [-t <plain|rust>] [-h]
+                            [-t <plain|rust|python|scripts>] [-h]
 
 Purpose:
   Create a GitHub repo (with README + MIT license), clone locally, optionally replace README,
-  set tokenized remote via 1Password, make an initial commit, and push. No scaffolding by default.
+  set tokenized remote via 1Password, optionally run a type-specific scaffolder, commit, and push.
+  No scaffolding when -t is omitted or set to "plain".
 
 Options:
   -u  GitHub username (e.g. suhailphotos)                 [required]
@@ -19,8 +20,8 @@ Options:
   -p  Destination path to clone into                       (default: "$MATRIX/<repo>")
   -R  Path to README.md to copy into the repo              (optional; replaces default)
   -V  Visibility: public|private                           (default: public)
-  -O  1Password item path for GitHub token (op read ...)   (optional; sets push remote)
-  -t  Project type: plain|rust                             (default: plain)
+  -O  1Password item path for GitHub token (op read ...)   (optional; used for clone/push)
+  -t  Project type: plain|rust|python|scripts              (default: plain = no scaffolding)
   -h  Help
 USAGE
 }
@@ -56,13 +57,13 @@ done
 [ -z "${REPO}" ] && { echo "Missing -r <repo>"; usage; exit 1; }
 [ -z "${DEST}" ] && DEST="${MATRIX:-$HOME/Library/CloudStorage/Dropbox/matrix}/${REPO}"
 case "$VISIBILITY" in public|private) ;; *) echo "Invalid -V (use public|private)"; exit 1;; esac
-case "$TYPE" in plain|rust) ;; *) echo "Invalid -t (use plain|rust)"; exit 1;; esac
+case "$TYPE" in plain|rust|python|scripts) ;; *) echo "Invalid -t (use plain|rust|python|scripts)"; exit 1;; esac
 
 for cmd in gh git; do
   command -v "$cmd" >/dev/null || { echo "Missing required command: $cmd"; exit 1; }
 done
 
-# --- 1) create remote repo with README + MIT license (avoids empty-clone warning) ---
+# --- 1) create remote repo with README + MIT license ---
 if gh repo view "${GH_USER}/${REPO}" >/dev/null 2>&1; then
   echo "Repo ${GH_USER}/${REPO} already exists. Skipping creation."
 else
@@ -73,12 +74,18 @@ else
     --add-readme
 fi
 
-# --- 2) clone locally ---
+# --- 2) clone locally (handle private clones with token if available) ---
 mkdir -p "$(dirname "$DEST")"
 if [ -d "${DEST}/.git" ]; then
   echo "Local repo already present at ${DEST}. Skipping clone."
 else
-  git clone "https://github.com/${GH_USER}/${REPO}.git" "${DEST}"
+  CLONE_URL="https://github.com/${GH_USER}/${REPO}.git"
+  if [ "${VISIBILITY}" = "private" ] && [ -n "${OP_SECRET_PATH}" ] && command -v op >/dev/null; then
+    if TOKEN="$(op read "${OP_SECRET_PATH}" --no-newline 2>/dev/null)"; then
+      CLONE_URL="https://x-access-token:${TOKEN}@github.com/${GH_USER}/${REPO}.git"
+    fi
+  fi
+  git clone "${CLONE_URL}" "${DEST}"
 fi
 cd "${DEST}"
 
@@ -89,27 +96,25 @@ elif [ ! -f README.md ]; then
   printf "# %s\n" "${REPO}" > README.md
 fi
 
-# --- 4) optional rust bootstrap handoff (uses your existing rust script) ---
-if [ "${TYPE}" = "rust" ]; then
+# --- 4) optional scaffolding by type (no-op for plain) ---
+if [ "${TYPE}" != "plain" ]; then
   CALLER_DIR="$(cd -P -- "$(dirname -- "$0")" && pwd -P)"
-  RUST_BOOT="$(cd "$CALLER_DIR/../rust" && pwd)/bootstrap_repo.sh"
-  if [ -x "$RUST_BOOT" ]; then
-    "$RUST_BOOT" .
+  SCAFFOLD_DIR="$(cd "$CALLER_DIR/../scaffold" && pwd 2>/dev/null || echo "")"
+  SCAFFOLD_SCRIPT="${SCAFFOLD_DIR}/${TYPE}.sh"
+  if [ -n "$SCAFFOLD_DIR" ] && [ -x "$SCAFFOLD_SCRIPT" ]; then
+    # Pass repo name and absolute repo root; run inside repo root
+    "$SCAFFOLD_SCRIPT" "${REPO}" "$(pwd)"
   else
-    echo "WARNING: Rust bootstrap not found at: $RUST_BOOT" >&2
+    echo "NOTE: Scaffolder not found for type '${TYPE}' at: ${SCAFFOLD_SCRIPT} (skipping)"
   fi
 fi
 
 # --- 5) set tokenized remote BEFORE pushing (prevents username prompt) ---
-if [ -n "${OP_SECRET_PATH}" ]; then
-  if command -v op >/dev/null; then
-    if TOKEN="$(op read "${OP_SECRET_PATH}" --no-newline 2>/dev/null)"; then
-      git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GH_USER}/${REPO}.git"
-    else
-      echo "WARNING: Could not read token from 1Password path: ${OP_SECRET_PATH}" >&2
-    fi
+if [ -n "${OP_SECRET_PATH}" ] && command -v op >/dev/null; then
+  if TOKEN="$(op read "${OP_SECRET_PATH}" --no-newline 2>/dev/null)"; then
+    git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GH_USER}/${REPO}.git"
   else
-    echo "WARNING: 'op' not found. Skipping remote auth update." >&2
+    echo "WARNING: Could not read token from 1Password path: ${OP_SECRET_PATH}" >&2
   fi
 fi
 

@@ -116,11 +116,10 @@ fi
 # --- 5) starter src/main.rs if missing ---
 mkdir -p src
 if [ ! -f src/main.rs ]; then
-  cat > src/main.rs <<'EOF'
+  cat > src/main.rs <<EOF
 fn main() {
-    // TODO: Detect environment and emit shell config.
-    println!("# apogee: pre-alpha placeholder");
-    println!("alias apogee_ok='echo apogee is alive'");
+    println!("# ${CARGO_NAME:-$REPO}: pre-alpha placeholder");
+    println!("alias ${CARGO_NAME:-$REPO}_ok='echo ${CARGO_NAME:-$REPO} is alive'");
 }
 EOF
 fi

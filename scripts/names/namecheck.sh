@@ -1,4 +1,3 @@
-\
 #!/usr/bin/env bash
 # namecheck.sh — check if names are available on popular registries
 # Compatible with macOS Bash 3.2 (no ${var,,} / associative arrays).
